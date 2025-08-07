@@ -1,90 +1,113 @@
 package com.equalizer
 
-import android.app.Activity
-import android.content.Context
-import android.content.Intent
-import android.net.Uri
+import android.media.audiofx.Equalizer
 import android.os.Bundle
-import android.util.Log
-import android.widget.*
+import android.widget.LinearLayout
+import android.widget.SeekBar
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
-import java.io.BufferedReader
-import java.io.InputStreamReader
+import com.equalizer.databinding.ActivityMainBinding
+import java.io.*
 
 class MainActivity : AppCompatActivity() {
 
-    private lateinit var eqContainer: LinearLayout
-    private lateinit var eqToggle: Switch
-    private val eqSliders = mutableListOf<SeekBar>()
-    private val EQ_PREF_KEY = "eq_enabled"
-    private val FILE_PICKER_REQUEST = 101
-    private val BAND_COUNT = 150
+    private lateinit var binding: ActivityMainBinding
+    private var equalizer: Equalizer? = null
+    private var isEQEnabled = false
+    private val sliders = mutableListOf<SeekBar>()
+    private val bandCount = 150
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
+        binding = ActivityMainBinding.inflate(layoutInflater)
+        setContentView(binding.root)
 
-        eqContainer = findViewById(R.id.eqContainer)
-        eqToggle = findViewById(R.id.eqToggle)
+        setupEqualizer()
+        setupUI()
+    }
 
-        // Restore toggle state
-        val prefs = getSharedPreferences("eq_prefs", Context.MODE_PRIVATE)
-        eqToggle.isChecked = prefs.getBoolean(EQ_PREF_KEY, false)
+    private fun setupEqualizer() {
+        equalizer = Equalizer(0, 0)
+        equalizer?.enabled = false
+    }
 
-        eqToggle.setOnCheckedChangeListener { _, isChecked ->
-            prefs.edit().putBoolean(EQ_PREF_KEY, isChecked).apply()
-            Toast.makeText(this, "EQ ${if (isChecked) "Enabled" else "Disabled"}", Toast.LENGTH_SHORT).show()
-        }
-
-        // Create EQ bands
-        for (i in 0 until BAND_COUNT) {
+    private fun setupUI() {
+        // Create 150 sliders
+        for (i in 0 until bandCount) {
             val seekBar = SeekBar(this).apply {
-                max = 100
-                progress = 50
-                layoutParams = LinearLayout.LayoutParams(10, LinearLayout.LayoutParams.MATCH_PARENT).apply {
-                    setMargins(2, 0, 2, 0)
-                }
-                rotation = -90f // Make vertical
+                max = 2000 // -1000 to +1000 in millibels
+                progress = 1000
+                layoutParams = LinearLayout.LayoutParams(
+                    0,
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    1f
+                )
+                rotation = -90f
             }
-            eqSliders.add(seekBar)
-            eqContainer.addView(seekBar)
+            binding.sliderContainer.addView(seekBar)
+            sliders.add(seekBar)
         }
 
-        findViewById<Button>(R.id.loadEqFileButton).setOnClickListener {
-            val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
-                type = "text/plain"
+        binding.enableEqButton.setOnCheckedChangeListener { _, isChecked ->
+            isEQEnabled = isChecked
+            equalizer?.enabled = isChecked
+            if (isChecked) applyEqFromSliders()
+        }
+
+        binding.resetButton.setOnClickListener {
+            sliders.forEach { it.progress = 1000 }
+            if (isEQEnabled) applyEqFromSliders()
+        }
+
+        binding.saveButton.setOnClickListener {
+            try {
+                val file = File(filesDir, "eq.txt")
+                val output = file.printWriter()
+                sliders.forEach { output.println(it.progress) }
+                output.close()
+                Toast.makeText(this, "Saved to eq.txt", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Toast.makeText(this, "Save failed", Toast.LENGTH_SHORT).show()
             }
-            startActivityForResult(Intent.createChooser(intent, "Select EQ File"), FILE_PICKER_REQUEST)
+        }
+
+        binding.loadButton.setOnClickListener {
+            try {
+                val file = File(filesDir, "eq.txt")
+                val lines = file.readLines()
+                sliders.forEachIndexed { index, seekBar ->
+                    if (index < lines.size) {
+                        seekBar.progress = lines[index].toInt()
+                    }
+                }
+                if (isEQEnabled) applyEqFromSliders()
+                Toast.makeText(this, "Loaded from eq.txt", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Toast.makeText(this, "Load failed", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == FILE_PICKER_REQUEST && resultCode == Activity.RESULT_OK) {
-            data?.data?.let { uri ->
-                loadEqValuesFromFile(uri)
-            }
+    private fun applyEqFromSliders() {
+        val minEQLevel = equalizer?.bandLevelRange?.get(0) ?: return
+        val maxEQLevel = equalizer?.bandLevelRange?.get(1) ?: return
+        val bandLevelRange = maxEQLevel - minEQLevel
+
+        val numBands = equalizer?.numberOfBands ?: return
+        for (i in 0 until numBands) {
+            val sliderIndex = (i * bandCount) / numBands
+            val level = ((sliders[sliderIndex].progress - 1000) / 1000.0f * bandLevelRange).toInt()
+            equalizer?.setBandLevel(i.toShort(), level.toShort())
         }
     }
 
-    private fun loadEqValuesFromFile(uri: Uri) {
-        try {
-            val inputStream = contentResolver.openInputStream(uri)
-            val reader = BufferedReader(InputStreamReader(inputStream))
-            val lines = reader.readLines()
+    override fun onPause() {
+        super.onPause()
+        equalizer?.enabled = isEQEnabled
+    }
 
-            for (i in lines.indices) {
-                if (i >= BAND_COUNT) break
-                val value = lines[i].trim().toIntOrNull()
-                value?.let {
-                    eqSliders[i].progress = value.coerceIn(0, 100)
-                }
-            }
-
-            Toast.makeText(this, "EQ file loaded!", Toast.LENGTH_SHORT).show()
-        } catch (e: Exception) {
-            Toast.makeText(this, "Failed to load EQ file: ${e.message}", Toast.LENGTH_LONG).show()
-            Log.e("EQ_LOAD", "Error loading EQ file", e)
-        }
+    override fun onDestroy() {
+        super.onDestroy()
+        equalizer?.release()
     }
 }
