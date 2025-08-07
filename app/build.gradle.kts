@@ -14,7 +14,7 @@ android {
         versionCode = 1
         versionName = "1.0"
 
-        // CMake settings
+        // Native build config
         externalNativeBuild {
             cmake {
                 cppFlags += ""
@@ -29,6 +29,20 @@ android {
     buildFeatures {
         dataBinding = true
         viewBinding = true
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
+    // Optional: Kotlin JVM Toolchain (modern, clean)
+    kotlin {
+        jvmToolchain(17)
     }
 
     buildTypes {
